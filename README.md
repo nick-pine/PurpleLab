@@ -6,7 +6,7 @@ PurpleLab safely reproduces selected adversary behaviors inside systems you
 own and control, collects the resulting telemetry, and determines whether
 defensive security tooling detected those behaviors.
 
-> **Status:** Early development 
+> **Status:** Early development WIP
 
 ## Installation (development)
 
