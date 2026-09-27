@@ -11,6 +11,7 @@ from __future__ import annotations
 import typer
 
 from purplelab import __version__
+from purplelab.engine import SimulationEngine
 from purplelab.registry import SimulationNotFoundError, create_default_registry
 
 app = typer.Typer(
@@ -52,9 +53,10 @@ def list_simulations() -> None:
 
     typer.echo(f"{'TECHNIQUE':<12} {'NAME':<30} {'PLATFORM':<10} {'RISK':<8}")
     for simulation in simulations:
+        metadata = simulation.metadata
         typer.echo(
-            f"{simulation.technique_id:<12} {simulation.name:<30} "
-            f"{simulation.platform.value:<10} {simulation.risk.value:<8}"
+            f"{metadata.technique_id:<12} {metadata.name:<30} "
+            f"{metadata.platform.value:<10} {metadata.risk.value:<8}"
         )
 
 
@@ -64,23 +66,55 @@ def simulation_info(technique_id: str) -> None:
     registry = create_default_registry()
 
     try:
+        metadata = registry.get(technique_id).metadata
+    except SimulationNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from None
+
+    telemetry = "\n".join(f"- {entry}" for entry in metadata.expected_telemetry)
+    detection = metadata.expected_detection_rule or "Not configured"
+
+    typer.echo("PurpleLab Simulation\n")
+    typer.echo(f"Technique:    {metadata.technique_id}")
+    typer.echo(f"Name:         {metadata.name}")
+    typer.echo(f"Tactic:       {metadata.tactic.value}")
+    typer.echo(f"Platform:     {metadata.platform.value}")
+    typer.echo(f"Risk:         {metadata.risk.value}")
+    typer.echo(f"\nDescription:\n{metadata.description}")
+    typer.echo(f"\nExpected Telemetry:\n{telemetry}")
+    typer.echo(f"\nExpected Detection:\n{detection}")
+
+
+@app.command("run")
+def run_simulation(technique_id: str) -> None:
+    """Execute a simulation and display its execution result."""
+    registry = create_default_registry()
+
+    try:
         simulation = registry.get(technique_id)
     except SimulationNotFoundError as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from None
 
-    telemetry = "\n".join(f"- {entry}" for entry in simulation.expected_telemetry)
-    detection = simulation.expected_detection_rule or "Not configured"
+    result = SimulationEngine().run(simulation)
+    metadata = simulation.metadata
 
-    typer.echo("PurpleLab Simulation\n")
-    typer.echo(f"Technique:    {simulation.technique_id}")
-    typer.echo(f"Name:         {simulation.name}")
-    typer.echo(f"Tactic:       {simulation.tactic.value}")
-    typer.echo(f"Platform:     {simulation.platform.value}")
-    typer.echo(f"Risk:         {simulation.risk.value}")
-    typer.echo(f"\nDescription:\n{simulation.description}")
-    typer.echo(f"\nExpected Telemetry:\n{telemetry}")
-    typer.echo(f"\nExpected Detection:\n{detection}")
+    typer.echo("PurpleLab Simulation Execution\n")
+    typer.echo(f"Technique:    {metadata.technique_id}")
+    typer.echo(f"Name:         {metadata.name}")
+    typer.echo(f"Status:       {'Success' if result.success else 'Failed'}")
+
+    if not result.success:
+        typer.echo(f"\nError:\n{result.error}", err=True)
+        typer.echo(f"\nStarted:      {result.started_at.isoformat()}")
+        typer.echo(f"Finished:     {result.finished_at.isoformat()}")
+        raise typer.Exit(code=1)
+
+    typer.echo("\nSystem Information:")
+    for key, value in result.data.items():
+        typer.echo(f"{key.capitalize() + ':':<13} {value}")
+    typer.echo(f"\nStarted:      {result.started_at.isoformat()}")
+    typer.echo(f"Finished:     {result.finished_at.isoformat()}")
 
 
 if __name__ == "__main__":
