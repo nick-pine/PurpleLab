@@ -15,5 +15,3 @@ venv/
 htmlcov/
 .coverage
 
-# Private project instructions, not for public repo
-prompt.txt
