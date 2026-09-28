@@ -73,6 +73,58 @@ drift apart). Each run:
 > machine used to build this project, so real Docker execution has been
 > verified only through mocked unit/CLI tests, not a live integration run.
 
+## Wazuh telemetry
+
+PurpleLab can optionally query Wazuh for telemetry observed during a
+simulation's execution window:
+
+```powershell
+purplelab run T1082 --target docker --telemetry
+```
+
+Important distinctions:
+
+- **Expected telemetry** (`purplelab info <TECHNIQUE>`) is metadata describing
+  what a simulation is conceptually expected to produce. It is never
+  confirmed evidence.
+- **Observed telemetry** (`--telemetry`) is real evidence retrieved from
+  Wazuh for one specific execution. PurpleLab never overwrites one with the
+  other.
+
+How it works: each execution gets a unique `execution_id`, and a bounded
+telemetry query is built from that execution's start/finish timestamps (plus
+a few seconds of padding) -- never an open-ended historical query. Alerts are
+retrieved from the **Wazuh indexer** (its OpenSearch-compatible `_search` API
+over the `wazuh-alerts-*` index), not the separate Wazuh manager/server API,
+which manages agents/rules rather than searching alert data. Results are
+capped at 50 events and mapped into PurpleLab's own bounded `TelemetryEvent`
+model -- the rest of PurpleLab never sees raw Wazuh JSON.
+
+Configuration (see `.env.example`) is read only from the environment:
+
+```
+PURPLELAB_WAZUH_URL=https://localhost:9200
+PURPLELAB_WAZUH_USERNAME=admin
+PURPLELAB_WAZUH_PASSWORD=changeme
+```
+
+TLS certificate verification is **on by default**; disabling it
+(`PURPLELAB_WAZUH_VERIFY_TLS=false`) is an explicit opt-in for local
+self-signed labs and prints a warning. Real credentials are never committed,
+logged, or printed in CLI output.
+
+A "zero events observed" result is always distinguishable from a Wazuh
+outage/authentication failure -- the former prints
+`No telemetry events observed in the query window.`, the latter prints a
+clean, controlled error with a non-zero exit code.
+
+> **Note:** Wazuh has not been installed/tested against a real deployment on
+> this development machine. The Wazuh client (`purplelab/integrations/wazuh.py`)
+> is fully unit-tested with the HTTP boundary mocked, but end-to-end
+> `simulation → Docker → Wazuh → telemetry` integration remains unverified.
+> This does not implement detection pass/fail validation -- that is a later
+> milestone.
+
 ## Testing
 
 ```powershell

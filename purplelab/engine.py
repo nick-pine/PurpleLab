@@ -9,6 +9,7 @@ of any particular target's implementation details (that lives in
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -43,6 +44,12 @@ class ExecutionResult(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    execution_id: str = Field(
+        description=(
+            "Unique identifier for this specific execution, distinct from "
+            "simulation_id (which identifies WHAT was run, not WHICH run)."
+        ),
+    )
     simulation_id: str
     technique_id: str
     started_at: datetime
@@ -70,12 +77,14 @@ class SimulationEngine:
 
     def run(self, simulation: Simulation, target: ExecutionTarget) -> ExecutionResult:
         """Execute `simulation` on `target`, always returning a structured result."""
+        execution_id = str(uuid.uuid4())
         started_at = datetime.now(timezone.utc)
 
         try:
             data = target.run(simulation)
         except SimulationExecutionError as error:
             return ExecutionResult(
+                execution_id=execution_id,
                 simulation_id=simulation.metadata.id,
                 technique_id=simulation.metadata.technique_id,
                 started_at=started_at,
@@ -86,6 +95,7 @@ class SimulationEngine:
             )
 
         return ExecutionResult(
+            execution_id=execution_id,
             simulation_id=simulation.metadata.id,
             technique_id=simulation.metadata.technique_id,
             started_at=started_at,

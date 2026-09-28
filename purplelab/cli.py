@@ -11,7 +11,8 @@ from __future__ import annotations
 import typer
 
 from purplelab import __version__
-from purplelab.engine import ExecutionTarget, SimulationEngine
+from purplelab.engine import ExecutionResult, ExecutionTarget, SimulationEngine
+from purplelab.integrations.wazuh import WazuhConfig, WazuhTelemetryProvider
 from purplelab.lab import (
     LabError,
     build_lab_image,
@@ -21,6 +22,7 @@ from purplelab.lab import (
 )
 from purplelab.registry import SimulationNotFoundError, create_default_registry
 from purplelab.targets import LAB_IMAGE, DockerTarget, LocalTarget, TargetType
+from purplelab.telemetry import TelemetryProviderError, build_query_for_execution
 
 app = typer.Typer(
     name="purplelab",
@@ -104,6 +106,11 @@ def run_simulation(
         "--target",
         help="Where to execute the simulation: 'local' or 'docker'.",
     ),
+    telemetry: bool = typer.Option(
+        False,
+        "--telemetry",
+        help="After a successful run, query Wazuh for telemetry observed during execution.",
+    ),
 ) -> None:
     """Execute a simulation and display its execution result."""
     registry = create_default_registry()
@@ -139,6 +146,42 @@ def run_simulation(
         typer.echo(f"{label + ':':<24} {value}")
     typer.echo(f"\nStarted:      {result.started_at.isoformat()}")
     typer.echo(f"Finished:     {result.finished_at.isoformat()}")
+
+    if telemetry:
+        _display_telemetry(result)
+
+
+def _display_telemetry(result: ExecutionResult) -> None:
+    """Query Wazuh for telemetry observed during `result`'s execution window."""
+    try:
+        config = WazuhConfig.from_env()
+    except TelemetryProviderError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from None
+
+    query = build_query_for_execution(
+        execution_id=result.execution_id,
+        simulation_id=result.simulation_id,
+        technique_id=result.technique_id,
+        started_at=result.started_at,
+        finished_at=result.finished_at,
+    )
+
+    try:
+        events = WazuhTelemetryProvider(config).collect(query)
+    except TelemetryProviderError as error:
+        typer.echo(f"\nTelemetry (Wazuh):\n{error}", err=True)
+        raise typer.Exit(code=1) from None
+
+    typer.echo("\nTelemetry (Wazuh):")
+    if not events:
+        typer.echo("No telemetry events observed in the query window.")
+        return
+
+    for event in events:
+        rule = event.rule_id or "unknown"
+        description = event.rule_description or event.summary
+        typer.echo(f"- [severity {event.severity}] rule {rule}: {description}")
 
 
 @lab_app.command("build")

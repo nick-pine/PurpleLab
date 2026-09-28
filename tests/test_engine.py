@@ -36,6 +36,18 @@ def test_engine_returns_execution_result_on_success() -> None:
     assert result.error is None
 
 
+def test_engine_generates_a_unique_execution_id_per_run() -> None:
+    """Each execution gets its own unique execution_id, not a timestamp-derived value."""
+    simulation = Simulation(metadata=_make_metadata(), run=lambda: {})
+
+    first = SimulationEngine().run(simulation, LocalTarget())
+    second = SimulationEngine().run(simulation, LocalTarget())
+
+    assert first.execution_id
+    assert second.execution_id
+    assert first.execution_id != second.execution_id
+
+
 def test_engine_populates_timezone_aware_timestamps() -> None:
     """started_at and finished_at should be timezone-aware and ordered."""
     simulation = Simulation(metadata=_make_metadata(), run=lambda: {})

@@ -253,3 +253,104 @@ def test_lab_status_reports_missing_docker_cli(monkeypatch: pytest.MonkeyPatch) 
 
     assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)
+
+
+def _fake_wazuh_config():
+    from purplelab.integrations.wazuh import WazuhConfig
+
+    return WazuhConfig(base_url="https://wazuh:9200", username="purplelab", password="fake")
+
+
+def test_run_with_telemetry_shows_observed_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`purplelab run T1082 --target docker --telemetry` should show observed events."""
+    from datetime import datetime, timezone
+
+    from purplelab.telemetry import TelemetryEvent
+
+    monkeypatch.setattr(
+        "purplelab.cli.DockerTarget.run",
+        lambda self, simulation: {"os": "Linux", "release": "6.8.0", "architecture": "x86_64"},
+    )
+    monkeypatch.setattr("purplelab.cli.WazuhConfig.from_env", lambda: _fake_wazuh_config())
+
+    fake_event = TelemetryEvent(
+        provider="wazuh",
+        observed_at=datetime.now(timezone.utc),
+        source="lab-target",
+        rule_id="5501",
+        rule_description="Login session opened",
+        severity=3,
+        summary="session opened",
+    )
+    monkeypatch.setattr(
+        "purplelab.cli.WazuhTelemetryProvider.collect", lambda self, query: (fake_event,)
+    )
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "docker", "--telemetry"])
+
+    assert result.exit_code == 0
+    assert "Telemetry (Wazuh)" in result.stdout
+    assert "5501" in result.stdout
+
+
+def test_run_with_telemetry_shows_zero_events_distinctly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zero observed events must be clearly distinguishable from a provider failure."""
+    monkeypatch.setattr(
+        "purplelab.cli.DockerTarget.run",
+        lambda self, simulation: {"os": "Linux", "release": "6.8.0", "architecture": "x86_64"},
+    )
+    monkeypatch.setattr("purplelab.cli.WazuhConfig.from_env", lambda: _fake_wazuh_config())
+    monkeypatch.setattr("purplelab.cli.WazuhTelemetryProvider.collect", lambda self, query: ())
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "docker", "--telemetry"])
+
+    assert result.exit_code == 0
+    assert "No telemetry events observed" in result.stdout
+
+
+def test_run_with_telemetry_reports_unconfigured_wazuh_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing Wazuh configuration should fail cleanly, not with a traceback."""
+    from purplelab.telemetry import TelemetryProviderError
+
+    monkeypatch.setattr(
+        "purplelab.cli.DockerTarget.run",
+        lambda self, simulation: {"os": "Linux", "release": "6.8.0", "architecture": "x86_64"},
+    )
+
+    def _raise():
+        raise TelemetryProviderError("Wazuh is not configured.")
+
+    monkeypatch.setattr("purplelab.cli.WazuhConfig.from_env", _raise)
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "docker", "--telemetry"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "fake" not in result.output.lower()
+
+
+def test_run_with_telemetry_reports_authentication_failure_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Wazuh authentication failure should fail cleanly without leaking credentials."""
+    from purplelab.telemetry import TelemetryAuthenticationError
+
+    monkeypatch.setattr(
+        "purplelab.cli.DockerTarget.run",
+        lambda self, simulation: {"os": "Linux", "release": "6.8.0", "architecture": "x86_64"},
+    )
+    monkeypatch.setattr("purplelab.cli.WazuhConfig.from_env", lambda: _fake_wazuh_config())
+
+    def _raise(self, query):
+        raise TelemetryAuthenticationError("The Wazuh indexer rejected PurpleLab's credentials.")
+
+    monkeypatch.setattr("purplelab.cli.WazuhTelemetryProvider.collect", _raise)
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "docker", "--telemetry"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+    assert "fake" not in result.output.lower()
+    assert "credentials" in result.output.lower()
