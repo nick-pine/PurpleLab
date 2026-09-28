@@ -62,11 +62,11 @@ def list_simulations() -> None:
         typer.echo("No simulations installed.")
         raise typer.Exit()
 
-    typer.echo(f"{'TECHNIQUE':<12} {'NAME':<30} {'PLATFORM':<10} {'RISK':<8}")
+    typer.echo(f"{'TECHNIQUE':<12} {'NAME':<42} {'PLATFORM':<10} {'RISK':<8}")
     for simulation in simulations:
         metadata = simulation.metadata
         typer.echo(
-            f"{metadata.technique_id:<12} {metadata.name:<30} "
+            f"{metadata.technique_id:<12} {metadata.name:<42} "
             f"{metadata.platform.value:<10} {metadata.risk.value:<8}"
         )
 
@@ -133,9 +133,10 @@ def run_simulation(
         typer.echo(f"Finished:     {result.finished_at.isoformat()}")
         raise typer.Exit(code=1)
 
-    typer.echo("\nSystem Information:")
+    typer.echo("\nResult:")
     for key, value in result.data.items():
-        typer.echo(f"{key.capitalize() + ':':<13} {value}")
+        label = key.replace("_", " ").capitalize()
+        typer.echo(f"{label + ':':<24} {value}")
     typer.echo(f"\nStarted:      {result.started_at.isoformat()}")
     typer.echo(f"Finished:     {result.finished_at.isoformat()}")
 

@@ -13,7 +13,8 @@ from pathlib import Path
 
 from purplelab.targets import LAB_IMAGE
 
-DOCKERFILE_DIR = Path(__file__).resolve().parent.parent / "docker" / "target"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DOCKERFILE_PATH = REPO_ROOT / "docker" / "target" / "Dockerfile"
 DOCKER_INFO_TIMEOUT_SECONDS = 10
 DOCKER_BUILD_TIMEOUT_SECONDS = 300
 
@@ -66,7 +67,12 @@ def lab_image_built() -> bool:
 
 
 def build_lab_image() -> None:
-    """Build the PurpleLab lab image from `docker/target/Dockerfile`."""
+    """Build the PurpleLab lab image from `docker/target/Dockerfile`.
+
+    The build context is the repository root (not `docker/target/`) so the
+    Dockerfile can copy the shared `simulations/_stdlib_collectors.py`
+    module without duplicating it inside the image build directory.
+    """
     if not docker_cli_available():
         raise LabError(
             "Docker CLI was not found. Install/start Docker before building the lab image."
@@ -74,7 +80,15 @@ def build_lab_image() -> None:
 
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["docker", "build", "-t", LAB_IMAGE, str(DOCKERFILE_DIR)],
+            [
+                "docker",
+                "build",
+                "-t",
+                LAB_IMAGE,
+                "-f",
+                str(DOCKERFILE_PATH),
+                str(REPO_ROOT),
+            ],
             capture_output=True,
             text=True,
             timeout=DOCKER_BUILD_TIMEOUT_SECONDS,

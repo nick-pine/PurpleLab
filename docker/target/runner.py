@@ -3,27 +3,37 @@ container.
 
 Only known PurpleLab technique IDs are accepted. This script never
 executes an arbitrary command supplied by a caller -- it looks up the
-technique ID in a fixed table of known collection functions.
+technique ID in a fixed table of known collection functions, which live in
+`_stdlib_collectors.py` (the same module the host-side simulations use, so
+container and local behavior cannot drift apart).
 """
 
 from __future__ import annotations
 
 import json
-import platform
 import sys
 
-
-def _t1082() -> dict[str, str]:
-    """Collect basic OS/kernel/architecture info from inside this container."""
-    return {
-        "os": platform.system(),
-        "release": platform.release(),
-        "architecture": platform.machine(),
-    }
-
+try:
+    # Inside the built image, this file sits next to runner.py (flat layout).
+    from _stdlib_collectors import (
+        collect_account_information,
+        collect_network_configuration,
+        collect_process_information,
+        collect_system_information,
+    )
+except ImportError:  # pragma: no cover - fallback when tested from the repo root
+    from simulations._stdlib_collectors import (
+        collect_account_information,
+        collect_network_configuration,
+        collect_process_information,
+        collect_system_information,
+    )
 
 _SIMULATIONS = {
-    "T1082": _t1082,
+    "T1082": collect_system_information,
+    "T1057": collect_process_information,
+    "T1087": collect_account_information,
+    "T1016": collect_network_configuration,
 }
 
 
@@ -44,3 +54,4 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
+

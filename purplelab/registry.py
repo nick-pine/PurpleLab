@@ -61,10 +61,18 @@ class SimulationRegistry:
 
 def create_default_registry() -> SimulationRegistry:
     """Build the registry containing PurpleLab's built-in simulations."""
+    from simulations.t1016_system_network_configuration_discovery import (
+        EXECUTABLE as T1016_EXECUTABLE,
+    )
+    from simulations.t1057_process_discovery import EXECUTABLE as T1057_EXECUTABLE
     from simulations.t1082_system_information_discovery import (
         EXECUTABLE as T1082_EXECUTABLE,
     )
+    from simulations.t1087_account_discovery import EXECUTABLE as T1087_EXECUTABLE
 
     registry = SimulationRegistry()
     registry.register(T1082_EXECUTABLE)
+    registry.register(T1057_EXECUTABLE)
+    registry.register(T1087_EXECUTABLE)
+    registry.register(T1016_EXECUTABLE)
     return registry

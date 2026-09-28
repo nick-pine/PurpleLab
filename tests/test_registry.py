@@ -1,4 +1,4 @@
-"""Tests for PurpleLab's simulation registry (Milestone 4 behavior)."""
+"""Tests for PurpleLab's simulation registry (Milestone 6 behavior)."""
 
 import pytest
 
@@ -8,6 +8,7 @@ from purplelab.registry import (
     Simulation,
     SimulationNotFoundError,
     SimulationRegistry,
+    create_default_registry,
 )
 
 
@@ -99,3 +100,20 @@ def test_registries_do_not_share_state() -> None:
     first_registry.register(_make_simulation("T1082"))
 
     assert second_registry.list_all() == ()
+
+
+def test_default_registry_contains_exactly_the_built_in_simulations() -> None:
+    """The default registry has exactly the four Milestone 6 built-in simulations."""
+    registry = create_default_registry()
+
+    technique_ids = {simulation.metadata.technique_id for simulation in registry.list_all()}
+
+    assert technique_ids == {"T1082", "T1057", "T1087", "T1016"}
+
+
+@pytest.mark.parametrize("technique_id", ["T1082", "T1057", "T1087", "T1016"])
+def test_default_registry_can_retrieve_each_built_in_simulation(technique_id: str) -> None:
+    """Each built-in simulation can be retrieved from the default registry."""
+    registry = create_default_registry()
+
+    assert registry.get(technique_id).metadata.technique_id == technique_id

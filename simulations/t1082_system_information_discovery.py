@@ -2,9 +2,10 @@
 
 import platform
 
-from purplelab.engine import SimulationExecutionError
 from purplelab.models import Platform, RiskLevel, SimulationMetadata, Tactic
+from purplelab.platform_guard import require_host_platform
 from purplelab.registry import Simulation
+from simulations._stdlib_collectors import collect_system_information
 
 SIMULATION = SimulationMetadata(
     id="t1082-system-information-discovery",
@@ -25,13 +26,6 @@ SIMULATION = SimulationMetadata(
     ),
 )
 
-# Maps our declared Platform enum to the string platform.system() returns.
-_HOST_PLATFORM_NAMES = {
-    Platform.LINUX: "Linux",
-    Platform.WINDOWS: "Windows",
-    Platform.MACOS: "Darwin",
-}
-
 
 def run() -> dict[str, str]:
     """Collect basic OS/kernel/architecture info from the local host.
@@ -39,21 +33,10 @@ def run() -> dict[str, str]:
     Refuses to run on a host that doesn't match the simulation's declared
     platform, rather than silently pretending compatibility.
     """
-    expected_host = _HOST_PLATFORM_NAMES[SIMULATION.platform]
-    actual_host = platform.system()
-
-    if actual_host != expected_host:
-        raise SimulationExecutionError(
-            f"{SIMULATION.technique_id} requires a {expected_host} host, "
-            f"but this host is running {actual_host}."
-        )
-
-    return {
-        "os": platform.system(),
-        "release": platform.release(),
-        "architecture": platform.machine(),
-    }
+    require_host_platform(SIMULATION, platform.system())
+    return collect_system_information()
 
 
 EXECUTABLE = Simulation(metadata=SIMULATION, run=run)
+
 

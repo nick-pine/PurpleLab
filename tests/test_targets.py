@@ -68,7 +68,18 @@ def test_docker_target_builds_safe_argument_list() -> None:
     command = args[0]
 
     assert command[0] == "docker"
+    assert command[1] == "run"
     assert command[-2:] == [LAB_IMAGE, "T1082"]
+    assert "--rm" in command
+    assert "--network" in command and command[command.index("--network") + 1] == "none"
+    assert "--cap-drop" in command and command[command.index("--cap-drop") + 1] == "ALL"
+    assert "--security-opt" in command
+    assert command[command.index("--security-opt") + 1] == "no-new-privileges"
+    assert "--read-only" in command
+    assert "--privileged" not in command
+    assert "-v" not in command and "--volume" not in command
+    assert "--network" in command  # never host networking
+    assert "host" not in command
     assert "shell" not in kwargs
     assert kwargs["timeout"] > 0
     assert kwargs["capture_output"] is True
