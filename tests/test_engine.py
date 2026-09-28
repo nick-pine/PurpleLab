@@ -1,10 +1,11 @@
-"""Tests for PurpleLab's simulation execution engine (Milestone 4 behavior)."""
+"""Tests for PurpleLab's simulation execution engine (Milestone 5 behavior)."""
 
 import pytest
 
 from purplelab.engine import SimulationEngine, SimulationExecutionError
 from purplelab.models import Platform, RiskLevel, SimulationMetadata, Tactic
 from purplelab.registry import Simulation
+from purplelab.targets import LocalTarget
 
 
 def _make_metadata(technique_id: str = "T1234") -> SimulationMetadata:
@@ -26,7 +27,7 @@ def test_engine_returns_execution_result_on_success() -> None:
     metadata = _make_metadata()
     simulation = Simulation(metadata=metadata, run=lambda: {"os": "Linux"})
 
-    result = SimulationEngine().run(simulation)
+    result = SimulationEngine().run(simulation, LocalTarget())
 
     assert result.success is True
     assert result.simulation_id == "fake-simulation"
@@ -39,7 +40,7 @@ def test_engine_populates_timezone_aware_timestamps() -> None:
     """started_at and finished_at should be timezone-aware and ordered."""
     simulation = Simulation(metadata=_make_metadata(), run=lambda: {})
 
-    result = SimulationEngine().run(simulation)
+    result = SimulationEngine().run(simulation, LocalTarget())
 
     assert result.started_at.tzinfo is not None
     assert result.finished_at.tzinfo is not None
@@ -54,7 +55,7 @@ def test_engine_returns_failed_result_on_execution_error() -> None:
 
     simulation = Simulation(metadata=_make_metadata(), run=_failing_run)
 
-    result = SimulationEngine().run(simulation)
+    result = SimulationEngine().run(simulation, LocalTarget())
 
     assert result.success is False
     assert result.data == {}
@@ -70,4 +71,24 @@ def test_engine_lets_unexpected_errors_propagate() -> None:
     simulation = Simulation(metadata=_make_metadata(), run=_buggy_run)
 
     with pytest.raises(ValueError):
-        SimulationEngine().run(simulation)
+        SimulationEngine().run(simulation, LocalTarget())
+
+
+def test_engine_uses_target_run_instead_of_simulation_run_directly() -> None:
+    """The engine delegates to the target, not directly to simulation.run()."""
+
+    class _RecordingTarget:
+        def __init__(self) -> None:
+            self.received: Simulation | None = None
+
+        def run(self, simulation: Simulation) -> dict[str, str]:
+            self.received = simulation
+            return {"source": "target"}
+
+    simulation = Simulation(metadata=_make_metadata(), run=lambda: {"source": "simulation"})
+    target = _RecordingTarget()
+
+    result = SimulationEngine().run(simulation, target)
+
+    assert target.received is simulation
+    assert result.data == {"source": "target"}

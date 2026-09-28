@@ -11,14 +11,25 @@ from __future__ import annotations
 import typer
 
 from purplelab import __version__
-from purplelab.engine import SimulationEngine
+from purplelab.engine import ExecutionTarget, SimulationEngine
+from purplelab.lab import (
+    LabError,
+    build_lab_image,
+    docker_cli_available,
+    docker_daemon_available,
+    lab_image_built,
+)
 from purplelab.registry import SimulationNotFoundError, create_default_registry
+from purplelab.targets import LAB_IMAGE, DockerTarget, LocalTarget, TargetType
 
 app = typer.Typer(
     name="purplelab",
     help="PurpleLab - a local adversary-emulation and detection-validation platform.",
     add_completion=False,
 )
+
+lab_app = typer.Typer(help="Manage the PurpleLab Docker lab environment.")
+app.add_typer(lab_app, name="lab")
 
 
 def _version_callback(show_version: bool) -> None:
@@ -86,7 +97,14 @@ def simulation_info(technique_id: str) -> None:
 
 
 @app.command("run")
-def run_simulation(technique_id: str) -> None:
+def run_simulation(
+    technique_id: str,
+    target: TargetType = typer.Option(
+        TargetType.LOCAL,
+        "--target",
+        help="Where to execute the simulation: 'local' or 'docker'.",
+    ),
+) -> None:
     """Execute a simulation and display its execution result."""
     registry = create_default_registry()
 
@@ -96,12 +114,17 @@ def run_simulation(technique_id: str) -> None:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from None
 
-    result = SimulationEngine().run(simulation)
+    execution_target: ExecutionTarget = (
+        LocalTarget() if target is TargetType.LOCAL else DockerTarget()
+    )
+
+    result = SimulationEngine().run(simulation, execution_target)
     metadata = simulation.metadata
 
     typer.echo("PurpleLab Simulation Execution\n")
     typer.echo(f"Technique:    {metadata.technique_id}")
     typer.echo(f"Name:         {metadata.name}")
+    typer.echo(f"Target:       {target.value.capitalize()}")
     typer.echo(f"Status:       {'Success' if result.success else 'Failed'}")
 
     if not result.success:
@@ -115,6 +138,45 @@ def run_simulation(technique_id: str) -> None:
         typer.echo(f"{key.capitalize() + ':':<13} {value}")
     typer.echo(f"\nStarted:      {result.started_at.isoformat()}")
     typer.echo(f"Finished:     {result.finished_at.isoformat()}")
+
+
+@lab_app.command("build")
+def lab_build() -> None:
+    """Build the PurpleLab Docker lab image."""
+    try:
+        build_lab_image()
+    except LabError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"Built PurpleLab lab image: {LAB_IMAGE}")
+
+
+@lab_app.command("status")
+def lab_status() -> None:
+    """Report whether Docker and the PurpleLab lab image are ready to use."""
+    if not docker_cli_available():
+        typer.echo(
+            "Docker CLI was not found. Install/start Docker before using the Docker lab.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if not docker_daemon_available():
+        typer.echo(
+            "Docker is installed, but the Docker engine is not reachable.", err=True
+        )
+        raise typer.Exit(code=1)
+
+    if not lab_image_built():
+        typer.echo(
+            f"Docker is available, but the lab image ({LAB_IMAGE}) has not been built.\n"
+            "Run `purplelab lab build` first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Docker is available and the lab image ({LAB_IMAGE}) is built.")
 
 
 if __name__ == "__main__":

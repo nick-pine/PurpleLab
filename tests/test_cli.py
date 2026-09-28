@@ -1,10 +1,12 @@
-"""Tests for the PurpleLab CLI (Milestone 4 behavior)."""
+"""Tests for the PurpleLab CLI (Milestone 5 behavior)."""
 
 import pytest
 from typer.testing import CliRunner
 
 from purplelab import __version__
 from purplelab.cli import app
+from purplelab.lab import LabError
+from purplelab.targets import DockerUnavailableError
 from simulations import t1082_system_information_discovery as t1082
 
 runner = CliRunner()
@@ -80,4 +82,82 @@ def test_run_reports_unknown_simulation_gracefully() -> None:
 
     assert result.exit_code != 0
     assert "T9999" in result.output
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_run_docker_target_reports_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`purplelab run T1082 --target docker` should succeed when Docker is mocked."""
+    monkeypatch.setattr(
+        "purplelab.cli.DockerTarget.run",
+        lambda self, simulation: {"os": "Linux", "release": "6.8.0", "architecture": "x86_64"},
+    )
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "docker"])
+
+    assert result.exit_code == 0
+    assert "T1082" in result.stdout
+    assert "Docker" in result.stdout
+    assert "Linux" in result.stdout
+
+
+def test_run_docker_target_reports_infrastructure_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mocked Docker infrastructure failure should exit non-zero with no traceback."""
+
+    def _raise(self, simulation):
+        raise DockerUnavailableError("Docker is installed, but the Docker engine is not reachable.")
+
+    monkeypatch.setattr("purplelab.cli.DockerTarget.run", _raise)
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "docker"])
+
+    assert result.exit_code != 0
+    assert "Failed" in result.stdout
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_lab_build_reports_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`purplelab lab build` should report success when the build is mocked."""
+    monkeypatch.setattr("purplelab.cli.build_lab_image", lambda: None)
+
+    result = runner.invoke(app, ["lab", "build"])
+
+    assert result.exit_code == 0
+    assert "Built" in result.stdout
+
+
+def test_lab_build_reports_failure_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`purplelab lab build` should fail cleanly when Docker is unavailable."""
+
+    def _raise():
+        raise LabError("Docker CLI was not found.")
+
+    monkeypatch.setattr("purplelab.cli.build_lab_image", _raise)
+
+    result = runner.invoke(app, ["lab", "build"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_lab_status_reports_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`purplelab lab status` should report readiness when everything is mocked available."""
+    monkeypatch.setattr("purplelab.cli.docker_cli_available", lambda: True)
+    monkeypatch.setattr("purplelab.cli.docker_daemon_available", lambda: True)
+    monkeypatch.setattr("purplelab.cli.lab_image_built", lambda: True)
+
+    result = runner.invoke(app, ["lab", "status"])
+
+    assert result.exit_code == 0
+    assert "available" in result.stdout.lower()
+
+
+def test_lab_status_reports_missing_docker_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`purplelab lab status` should fail cleanly when Docker CLI is missing."""
+    monkeypatch.setattr("purplelab.cli.docker_cli_available", lambda: False)
+
+    result = runner.invoke(app, ["lab", "status"])
+
+    assert result.exit_code != 0
     assert isinstance(result.exception, SystemExit)

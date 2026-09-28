@@ -1,13 +1,16 @@
 """Execution orchestration for PurpleLab simulations.
 
-The engine knows how to run a resolved `Simulation` and capture the
-outcome. It has no knowledge of any particular technique's behavior --
-that lives in each simulation module.
+The engine knows how to run a resolved `Simulation` against a chosen
+`ExecutionTarget` and capture the outcome. It has no knowledge of any
+particular technique's behavior (that lives in each simulation module) or
+of any particular target's implementation details (that lives in
+`purplelab.targets`).
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -16,6 +19,23 @@ from purplelab.registry import Simulation
 
 class SimulationExecutionError(Exception):
     """Raised when a simulation cannot be executed successfully."""
+
+
+class ExecutionTarget(Protocol):
+    """Executes a known simulation's behavior somewhere, returning its data.
+
+    A target defines WHERE and HOW a simulation runs (e.g. locally, or
+    inside a Docker container). It never accepts arbitrary user-supplied
+    commands -- it only knows how to run the fixed, known behavior a
+    `Simulation` already represents.
+    """
+
+    def run(self, simulation: Simulation) -> dict[str, str]:
+        """Execute `simulation` on this target, returning its structured data.
+
+        Raises `SimulationExecutionError` (or a subclass) on any failure.
+        """
+        ...
 
 
 class ExecutionResult(BaseModel):
@@ -46,14 +66,14 @@ class ExecutionResult(BaseModel):
 
 
 class SimulationEngine:
-    """Orchestrates execution of a resolved `Simulation`."""
+    """Orchestrates execution of a resolved `Simulation` against a target."""
 
-    def run(self, simulation: Simulation) -> ExecutionResult:
-        """Execute `simulation`, always returning a structured result."""
+    def run(self, simulation: Simulation, target: ExecutionTarget) -> ExecutionResult:
+        """Execute `simulation` on `target`, always returning a structured result."""
         started_at = datetime.now(timezone.utc)
 
         try:
-            data = simulation.run()
+            data = target.run(simulation)
         except SimulationExecutionError as error:
             return ExecutionResult(
                 simulation_id=simulation.metadata.id,
