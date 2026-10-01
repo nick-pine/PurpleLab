@@ -1,19 +1,27 @@
-"""Telemetry evidence models and provider abstraction (Milestone 7).
+"""Telemetry evidence models and provider abstraction (Milestone 7/8).
 
 This module has no knowledge of Wazuh specifically -- `purplelab.integrations.wazuh`
 implements a concrete provider. The rest of PurpleLab only depends on this
 module's `TelemetryProvider` Protocol and models, keeping `SimulationEngine`
 and the CLI independent of any particular SIEM.
 
-Telemetry here is strictly OBSERVED evidence retrieved from a provider. It is
-never the same thing as a simulation's EXPECTED telemetry metadata
-(`SimulationMetadata.expected_telemetry`), and this module never overwrites
-one with the other.
+Terminology matters here:
+
+- EXPECTED telemetry (`SimulationMetadata.expected_telemetry`) is conceptual
+  metadata describing what a simulation is designed to produce.
+- OBSERVED telemetry (`TelemetryEvent`) is real evidence retrieved from a
+  provider. With the current `WazuhTelemetryProvider`, that means Wazuh
+  ALERTS (from `wazuh-alerts-*`), which is not necessarily a complete
+  representation of all raw endpoint telemetry -- an empty alert search does
+  not prove no underlying activity occurred.
+
+This module never overwrites one of these concepts with another.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from enum import Enum
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -119,6 +127,52 @@ class TelemetryProvider(Protocol):
     def collect(self, query: TelemetryQuery) -> tuple[TelemetryEvent, ...]:
         """Return observed telemetry events, or raise a `TelemetryProviderError`."""
         ...
+
+
+class TelemetryCollectionStatus(str, Enum):
+    """Whether a telemetry-collection attempt itself succeeded."""
+
+    SUCCESS = "success"
+    PROVIDER_ERROR = "provider_error"
+
+
+class TelemetryCollectionResult(BaseModel):
+    """The structured outcome of one telemetry-collection attempt.
+
+    Consumers such as `DetectionValidator` depend on this plain data model
+    instead of catching provider-specific exceptions (e.g. Wazuh HTTP errors)
+    themselves, so validation logic stays independent of any one provider.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    status: TelemetryCollectionStatus
+    events: tuple[TelemetryEvent, ...] = Field(default_factory=tuple)
+    error: str | None = Field(
+        default=None,
+        description="Human-readable failure reason, present only when status is PROVIDER_ERROR.",
+    )
+
+
+def collect_telemetry(
+    provider: TelemetryProvider, query: TelemetryQuery
+) -> TelemetryCollectionResult:
+    """Call `provider.collect(query)`, converting any provider error into a result.
+
+    The provider contract itself still raises `TelemetryProviderError` (it
+    must never silently swallow a failure into an empty tuple) -- this is the
+    orchestration-boundary helper that converts that exception into a plain,
+    inspectable `TelemetryCollectionResult` for consumers that shouldn't need
+    to catch provider-specific exceptions themselves.
+    """
+    try:
+        events = provider.collect(query)
+    except TelemetryProviderError as error:
+        return TelemetryCollectionResult(
+            status=TelemetryCollectionStatus.PROVIDER_ERROR, events=(), error=str(error)
+        )
+
+    return TelemetryCollectionResult(status=TelemetryCollectionStatus.SUCCESS, events=events)
 
 
 def build_query_for_execution(

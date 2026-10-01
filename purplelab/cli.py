@@ -20,9 +20,17 @@ from purplelab.lab import (
     docker_daemon_available,
     lab_image_built,
 )
+from purplelab.models import SimulationMetadata
 from purplelab.registry import SimulationNotFoundError, create_default_registry
 from purplelab.targets import LAB_IMAGE, DockerTarget, LocalTarget, TargetType
-from purplelab.telemetry import TelemetryProviderError, build_query_for_execution
+from purplelab.telemetry import (
+    TelemetryCollectionResult,
+    TelemetryCollectionStatus,
+    TelemetryProviderError,
+    build_query_for_execution,
+    collect_telemetry,
+)
+from purplelab.validation import DetectionValidator
 
 app = typer.Typer(
     name="purplelab",
@@ -109,7 +117,15 @@ def run_simulation(
     telemetry: bool = typer.Option(
         False,
         "--telemetry",
-        help="After a successful run, query Wazuh for telemetry observed during execution.",
+        help="After a successful run, display Wazuh alerts observed during execution.",
+    ),
+    validate: bool = typer.Option(
+        False,
+        "--validate",
+        help=(
+            "After a successful run, evaluate the configured detection expectation "
+            "against observed Wazuh alerts (implies --telemetry retrieval)."
+        ),
     ),
 ) -> None:
     """Execute a simulation and display its execution result."""
@@ -147,12 +163,21 @@ def run_simulation(
     typer.echo(f"\nStarted:      {result.started_at.isoformat()}")
     typer.echo(f"Finished:     {result.finished_at.isoformat()}")
 
+    collection: TelemetryCollectionResult | None = None
     if telemetry:
-        _display_telemetry(result)
+        collection = _display_observed_alerts(result)
+    if validate:
+        if collection is None:
+            collection = _collect_telemetry_for_validation(result)
+        _display_validation(result, metadata, collection)
 
 
-def _display_telemetry(result: ExecutionResult) -> None:
-    """Query Wazuh for telemetry observed during `result`'s execution window."""
+def _display_observed_alerts(result: ExecutionResult) -> TelemetryCollectionResult:
+    """Query Wazuh for alerts observed during `result`'s execution window, and print them.
+
+    This display path stays strict: a provider/config failure exits non-zero
+    with a clean error, since the user explicitly asked to see the alerts.
+    """
     try:
         config = WazuhConfig.from_env()
     except TelemetryProviderError as error:
@@ -170,18 +195,63 @@ def _display_telemetry(result: ExecutionResult) -> None:
     try:
         events = WazuhTelemetryProvider(config).collect(query)
     except TelemetryProviderError as error:
-        typer.echo(f"\nTelemetry (Wazuh):\n{error}", err=True)
+        typer.echo(f"\nObserved Wazuh Alerts:\n{error}", err=True)
         raise typer.Exit(code=1) from None
 
-    typer.echo("\nTelemetry (Wazuh):")
+    typer.echo("\nObserved Wazuh Alerts:")
     if not events:
-        typer.echo("No telemetry events observed in the query window.")
-        return
+        typer.echo("No Wazuh alerts observed in the query window.")
+    else:
+        for event in events:
+            rule = event.rule_id or "unknown"
+            description = event.rule_description or event.summary
+            typer.echo(f"- [severity {event.severity}] rule {rule}: {description}")
 
-    for event in events:
-        rule = event.rule_id or "unknown"
-        description = event.rule_description or event.summary
-        typer.echo(f"- [severity {event.severity}] rule {rule}: {description}")
+    return TelemetryCollectionResult(status=TelemetryCollectionStatus.SUCCESS, events=events)
+
+
+def _collect_telemetry_for_validation(result: ExecutionResult) -> TelemetryCollectionResult:
+    """Collect telemetry for `--validate` without ever raising.
+
+    Unlike `_display_observed_alerts`, this path degrades a missing/failing
+    Wazuh provider into a `PROVIDER_ERROR` result rather than exiting, so the
+    validator can report a clean NOT_EVALUATED verdict with a reason.
+    """
+    try:
+        config = WazuhConfig.from_env()
+    except TelemetryProviderError as error:
+        return TelemetryCollectionResult(
+            status=TelemetryCollectionStatus.PROVIDER_ERROR, events=(), error=str(error)
+        )
+
+    query = build_query_for_execution(
+        execution_id=result.execution_id,
+        simulation_id=result.simulation_id,
+        technique_id=result.technique_id,
+        started_at=result.started_at,
+        finished_at=result.finished_at,
+    )
+
+    return collect_telemetry(WazuhTelemetryProvider(config), query)
+
+
+def _display_validation(
+    execution: ExecutionResult,
+    metadata: SimulationMetadata,
+    collection: TelemetryCollectionResult,
+) -> None:
+    """Evaluate and print the detection-validation verdict for `execution`."""
+    validation = DetectionValidator().validate(
+        execution=execution, metadata=metadata, telemetry=collection
+    )
+
+    typer.echo("\nDetection Validation:")
+    typer.echo(f"Status:        {validation.status.value.upper()}")
+    if validation.expected_rule_id is not None:
+        typer.echo(f"Expected rule: {validation.expected_rule_id}")
+    if validation.matched_rule_ids:
+        typer.echo(f"Matched rule:  {', '.join(validation.matched_rule_ids)}")
+    typer.echo(f"Reason:        {validation.reason}")
 
 
 @lab_app.command("build")

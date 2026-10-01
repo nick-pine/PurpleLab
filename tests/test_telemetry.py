@@ -9,9 +9,12 @@ from pydantic import ValidationError
 
 from purplelab.telemetry import (
     MAX_PADDING_SECONDS,
+    TelemetryCollectionStatus,
     TelemetryEvent,
+    TelemetryProviderError,
     TelemetryQuery,
     build_query_for_execution,
+    collect_telemetry,
 )
 
 
@@ -120,3 +123,44 @@ def test_build_query_for_execution_produces_a_bounded_window() -> None:
     # The query must never span more than the execution window plus bounded padding.
     total_span = query.padded_end - query.padded_start
     assert total_span <= (finished_at - started_at) + timedelta(seconds=2 * MAX_PADDING_SECONDS)
+
+
+def test_collect_telemetry_represents_successful_zero_alerts_explicitly() -> None:
+    query = TelemetryQuery(
+        execution_id="exec-1",
+        simulation_id="sim-1",
+        technique_id="T1082",
+        window_start=_now(),
+        window_end=_now(),
+    )
+
+    class _EmptyProvider:
+        def collect(self, received_query: TelemetryQuery) -> tuple[TelemetryEvent, ...]:
+            assert received_query is query
+            return ()
+
+    result = collect_telemetry(_EmptyProvider(), query)
+
+    assert result.status is TelemetryCollectionStatus.SUCCESS
+    assert result.events == ()
+    assert result.error is None
+
+
+def test_collect_telemetry_preserves_provider_failure_without_swallowing_it() -> None:
+    query = TelemetryQuery(
+        execution_id="exec-1",
+        simulation_id="sim-1",
+        technique_id="T1082",
+        window_start=_now(),
+        window_end=_now(),
+    )
+
+    class _FailingProvider:
+        def collect(self, received_query: TelemetryQuery) -> tuple[TelemetryEvent, ...]:
+            raise TelemetryProviderError("provider unavailable")
+
+    result = collect_telemetry(_FailingProvider(), query)
+
+    assert result.status is TelemetryCollectionStatus.PROVIDER_ERROR
+    assert result.events == ()
+    assert result.error == "provider unavailable"

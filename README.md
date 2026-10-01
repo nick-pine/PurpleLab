@@ -87,9 +87,11 @@ Important distinctions:
 - **Expected telemetry** (`purplelab info <TECHNIQUE>`) is metadata describing
   what a simulation is conceptually expected to produce. It is never
   confirmed evidence.
-- **Observed telemetry** (`--telemetry`) is real evidence retrieved from
-  Wazuh for one specific execution. PurpleLab never overwrites one with the
-  other.
+- **Observed telemetry** is provider-owned evidence retrieved for one
+  specific execution. The current Wazuh provider searches the
+  `wazuh-alerts-*` alert index, so its results are specifically **observed
+  Wazuh alerts**, not a complete record of all raw endpoint telemetry.
+  PurpleLab never overwrites expected telemetry with observed evidence.
 
 How it works: each execution gets a unique `execution_id`, and a bounded
 telemetry query is built from that execution's start/finish timestamps (plus
@@ -97,8 +99,9 @@ a few seconds of padding) -- never an open-ended historical query. Alerts are
 retrieved from the **Wazuh indexer** (its OpenSearch-compatible `_search` API
 over the `wazuh-alerts-*` index), not the separate Wazuh manager/server API,
 which manages agents/rules rather than searching alert data. Results are
-capped at 50 events and mapped into PurpleLab's own bounded `TelemetryEvent`
-model -- the rest of PurpleLab never sees raw Wazuh JSON.
+capped at 50 alerts and mapped into PurpleLab's own bounded `TelemetryEvent`
+model -- the rest of PurpleLab never sees raw Wazuh JSON. An empty alert
+search does not prove that no underlying endpoint telemetry existed.
 
 Configuration (see `.env.example`) is read only from the environment:
 
@@ -113,17 +116,42 @@ TLS certificate verification is **on by default**; disabling it
 self-signed labs and prints a warning. Real credentials are never committed,
 logged, or printed in CLI output.
 
-A "zero events observed" result is always distinguishable from a Wazuh
+A "zero Wazuh alerts observed" result is always distinguishable from a Wazuh
 outage/authentication failure -- the former prints
-`No telemetry events observed in the query window.`, the latter prints a
-clean, controlled error with a non-zero exit code.
+`No Wazuh alerts observed in the query window.`, the latter prints a clean,
+controlled error with a non-zero exit code.
+
+## Detection validation
+
+Use `--validate` to evaluate observed Wazuh alerts against the simulation's
+configured expected detection rule:
+
+```powershell
+purplelab run T1082 --target docker --validate
+```
+
+`--validate` retrieves alerts automatically and reports one of three states:
+
+- **DETECTED:** the simulation succeeded and an observed alert has an exact
+  match for the configured rule ID.
+- **NOT_DETECTED:** the simulation and alert query succeeded, but the exact
+  expected rule was absent. This does **not** mean that no telemetry existed.
+- **NOT_EVALUATED:** PurpleLab could not legitimately assess detection, such
+  as when execution failed, Wazuh was unavailable, or no expected rule is
+  configured.
+
+The four built-in simulations currently have no confirmed Wazuh rule IDs, so
+their production validation result is intentionally `NOT_EVALUATED`. Unit
+tests use fake rule IDs to exercise matching behavior. Validation is exact
+rule-ID matching only; unrelated alerts, severity, descriptions, timestamps,
+and technique text do not count.
 
 > **Note:** Wazuh has not been installed/tested against a real deployment on
 > this development machine. The Wazuh client (`purplelab/integrations/wazuh.py`)
 > is fully unit-tested with the HTTP boundary mocked, but end-to-end
-> `simulation → Docker → Wazuh → telemetry` integration remains unverified.
-> This does not implement detection pass/fail validation -- that is a later
-> milestone.
+> `simulation → Docker → Wazuh → alerts → validation` integration remains
+> unverified. Unit tests mock the HTTP boundary and use structured fake
+> execution/alert data; no real detection coverage is claimed.
 
 ## Testing
 

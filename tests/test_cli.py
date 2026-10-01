@@ -289,8 +289,9 @@ def test_run_with_telemetry_shows_observed_events(monkeypatch: pytest.MonkeyPatc
     result = runner.invoke(app, ["run", "T1082", "--target", "docker", "--telemetry"])
 
     assert result.exit_code == 0
-    assert "Telemetry (Wazuh)" in result.stdout
+    assert "Observed Wazuh Alerts" in result.stdout
     assert "5501" in result.stdout
+    assert "Detection Validation" not in result.stdout
 
 
 def test_run_with_telemetry_shows_zero_events_distinctly(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,7 +306,7 @@ def test_run_with_telemetry_shows_zero_events_distinctly(monkeypatch: pytest.Mon
     result = runner.invoke(app, ["run", "T1082", "--target", "docker", "--telemetry"])
 
     assert result.exit_code == 0
-    assert "No telemetry events observed" in result.stdout
+    assert "No Wazuh alerts observed" in result.stdout
 
 
 def test_run_with_telemetry_reports_unconfigured_wazuh_cleanly(
@@ -354,3 +355,207 @@ def test_run_with_telemetry_reports_authentication_failure_cleanly(
     assert isinstance(result.exception, SystemExit)
     assert "fake" not in result.output.lower()
     assert "credentials" in result.output.lower()
+
+
+def _run_docker_with_validate(monkeypatch: pytest.MonkeyPatch, collect_impl) -> object:
+    """Invoke `run T1082 --target docker --validate` with a mocked telemetry collector."""
+    monkeypatch.setattr(
+        "purplelab.cli.DockerTarget.run",
+        lambda self, simulation: {"os": "Linux", "release": "6.8.0", "architecture": "x86_64"},
+    )
+    monkeypatch.setattr("purplelab.cli.WazuhConfig.from_env", lambda: _fake_wazuh_config())
+    monkeypatch.setattr("purplelab.cli.WazuhTelemetryProvider.collect", collect_impl)
+    return runner.invoke(app, ["run", "T1082", "--target", "docker", "--validate"])
+
+
+def _registry_with_configured_rule(rule_id: str = "100201"):
+    """Build a registry containing a T1082 simulation with a configured expected rule.
+
+    `SimulationMetadata` is a frozen model, so tests build a fresh instance
+    with `expected_detection_rule` set rather than mutating the real one.
+    """
+    from purplelab.models import Platform, RiskLevel, SimulationMetadata, Tactic
+    from purplelab.registry import Simulation, SimulationRegistry
+
+    metadata = SimulationMetadata(
+        id="t1082-system-information-discovery",
+        technique_id="T1082",
+        name="System Information Discovery",
+        description="Fake metadata used only for --validate CLI tests.",
+        tactic=Tactic.DISCOVERY,
+        platform=Platform.LINUX,
+        risk=RiskLevel.LOW,
+        expected_telemetry=("process creation",),
+        expected_detection_rule=rule_id,
+    )
+    registry = SimulationRegistry()
+    registry.register(Simulation(metadata=metadata, run=lambda: {"os": "Linux"}))
+    return registry
+
+
+def test_run_with_validate_reports_not_evaluated_when_no_rule_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T1082 has no configured expected_detection_rule, so --validate is honest: NOT_EVALUATED."""
+    result = _run_docker_with_validate(monkeypatch, lambda self, query: ())
+
+    assert result.exit_code == 0
+    assert "Detection Validation" in result.stdout
+    assert "NOT_EVALUATED" in result.stdout
+    assert "No expected detection rule is configured" in result.stdout
+
+
+def test_run_with_validate_reports_detected_for_a_matching_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fake simulation with a configured rule and a matching alert should show DETECTED."""
+    from datetime import datetime, timezone
+
+    from purplelab.telemetry import TelemetryEvent
+
+    fake_event = TelemetryEvent(
+        provider="wazuh",
+        observed_at=datetime.now(timezone.utc),
+        source="lab-target",
+        event_id="evt-1",
+        rule_id="100201",
+        rule_description="Fake matching rule",
+        severity=5,
+        summary="matched",
+    )
+
+    monkeypatch.setattr(
+        "purplelab.cli.create_default_registry", lambda: _registry_with_configured_rule()
+    )
+    monkeypatch.setattr(
+        "purplelab.cli.DockerTarget.run",
+        lambda self, simulation: {"os": "Linux"},
+    )
+    monkeypatch.setattr("purplelab.cli.WazuhConfig.from_env", lambda: _fake_wazuh_config())
+    monkeypatch.setattr(
+        "purplelab.cli.WazuhTelemetryProvider.collect", lambda self, query: (fake_event,)
+    )
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "docker", "--validate"])
+
+    assert result.exit_code == 0
+    assert "DETECTED" in result.stdout
+    assert "100201" in result.stdout
+
+
+def test_run_with_validate_reports_not_detected_for_unrelated_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrelated alert during the window must never be treated as a match."""
+    from datetime import datetime, timezone
+
+    from purplelab.telemetry import TelemetryEvent
+
+    unrelated_event = TelemetryEvent(
+        provider="wazuh",
+        observed_at=datetime.now(timezone.utc),
+        source="lab-target",
+        rule_id="5501",
+        summary="unrelated",
+    )
+
+    monkeypatch.setattr(
+        "purplelab.cli.create_default_registry", lambda: _registry_with_configured_rule()
+    )
+
+    result = _run_docker_with_validate(monkeypatch, lambda self, query: (unrelated_event,))
+
+    assert result.exit_code == 0
+    assert "NOT_DETECTED" in result.stdout
+
+
+def test_run_with_validate_reports_not_detected_for_zero_alerts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful, empty query with a configured rule is NOT_DETECTED, not NOT_EVALUATED."""
+    monkeypatch.setattr(
+        "purplelab.cli.create_default_registry", lambda: _registry_with_configured_rule()
+    )
+
+    result = _run_docker_with_validate(monkeypatch, lambda self, query: ())
+
+    assert result.exit_code == 0
+    assert "NOT_DETECTED" in result.stdout
+
+
+def test_run_with_validate_reports_not_evaluated_on_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Wazuh provider failure must show NOT_EVALUATED, never NOT_DETECTED, under --validate."""
+    from purplelab.telemetry import TelemetryUnavailableError
+
+    def _raise(self, query):
+        raise TelemetryUnavailableError("Could not reach the Wazuh indexer.")
+
+    monkeypatch.setattr(
+        "purplelab.cli.create_default_registry", lambda: _registry_with_configured_rule()
+    )
+
+    result = _run_docker_with_validate(monkeypatch, _raise)
+
+    assert result.exit_code == 0
+    assert "NOT_EVALUATED" in result.stdout
+    assert "NOT_DETECTED" not in result.stdout
+    assert "fake" not in result.output.lower()
+
+
+def test_run_with_validate_never_requires_network_and_handles_missing_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--validate must not crash the process when Wazuh is unconfigured -- NOT_EVALUATED instead."""
+    from purplelab.telemetry import TelemetryProviderError
+
+    def _raise():
+        raise TelemetryProviderError("Wazuh is not configured.")
+
+    monkeypatch.setattr(
+        "purplelab.cli.create_default_registry", lambda: _registry_with_configured_rule()
+    )
+    monkeypatch.setattr(
+        "purplelab.cli.DockerTarget.run",
+        lambda self, simulation: {"os": "Linux"},
+    )
+    monkeypatch.setattr("purplelab.cli.WazuhConfig.from_env", _raise)
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "docker", "--validate"])
+
+    assert result.exit_code == 0
+    assert "NOT_EVALUATED" in result.stdout
+
+
+def test_run_with_validate_does_not_validate_a_failed_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed execution must be NOT_EVALUATED, never NOT_DETECTED, and skip Wazuh access."""
+    monkeypatch.setattr(t1082.platform, "system", lambda: "Windows")
+
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "purplelab.cli.WazuhConfig.from_env", lambda: calls.append("called") or _fake_wazuh_config()
+    )
+
+    result = runner.invoke(app, ["run", "T1082", "--target", "local", "--validate"])
+
+    assert result.exit_code != 0
+    assert "NOT_DETECTED" not in result.stdout
+    assert not calls
+
+
+def test_run_with_validate_reports_unknown_simulation_before_wazuh_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown technique ID must fail before any Wazuh configuration is touched."""
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "purplelab.cli.WazuhConfig.from_env", lambda: calls.append("called") or _fake_wazuh_config()
+    )
+
+    result = runner.invoke(app, ["run", "T9999", "--target", "docker", "--validate"])
+
+    assert result.exit_code != 0
+    assert not calls
